@@ -43,6 +43,42 @@ def download_file_from_google_drive(file_id, destination):
 
     save_response_content(response, destination)
 
+def download_drowsiness_model():
+    """Download the drowsiness detection model"""
+    
+    model_path = Path('models/improved_cnn_best.keras')
+    
+    # Check if model already exists
+    if model_path.exists():
+        print(f"✅ Drowsiness model already exists: {model_path}")
+        return True
+    
+    print("📥 Downloading drowsiness detection model...")
+    print("⏳ This may take 1-2 minutes...")
+    
+    # Add your drowsiness model Google Drive file ID here
+    # Get it from: https://drive.google.com/file/d/FILE_ID/view
+    file_id = 'PUT_YOUR_DROWSINESS_MODEL_FILE_ID_HERE'  # ← حطي الـ ID هنا
+    
+    try:
+        # Create models directory if not exists
+        model_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Download
+        download_file_from_google_drive(file_id, str(model_path))
+        
+        # Verify download
+        if model_path.exists() and model_path.stat().st_size > 100000:  # > 100KB
+            print(f"✅ Drowsiness model downloaded successfully: {model_path}")
+            return True
+        else:
+            print("❌ Download failed or file is too small")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Error downloading drowsiness model: {e}")
+        return False
+
 def download_distraction_model():
     """Download the distraction detection model"""
     
@@ -50,7 +86,7 @@ def download_distraction_model():
     
     # Check if model already exists
     if model_path.exists():
-        print(f"✅ Model already exists: {model_path}")
+        print(f"✅ Distraction model already exists: {model_path}")
         return True
     
     print("📥 Downloading distraction detection model from Google Drive...")
@@ -68,15 +104,29 @@ def download_distraction_model():
         
         # Verify download
         if model_path.exists() and model_path.stat().st_size > 1000000:  # > 1MB
-            print(f"✅ Model downloaded successfully: {model_path}")
+            print(f"✅ Distraction model downloaded successfully: {model_path}")
             return True
         else:
             print("❌ Download failed or file is too small")
             return False
             
     except Exception as e:
-        print(f"❌ Error downloading model: {e}")
+        print(f"❌ Error downloading distraction model: {e}")
+        return False
+
+def download_all_models():
+    """Download all required models"""
+    print("🔄 Checking and downloading required models...")
+    
+    drowsy_ok = download_drowsiness_model()
+    distract_ok = download_distraction_model()
+    
+    if drowsy_ok and distract_ok:
+        print("✅ All models ready!")
+        return True
+    else:
+        print("⚠️ Some models failed to download")
         return False
 
 if __name__ == "__main__":
-    download_distraction_model()
+    download_all_models()
