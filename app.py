@@ -9,13 +9,29 @@ from pathlib import Path
 import tempfile
 from PIL import Image
 
-# Auto-download large model if not exists
-model_file = Path('models/driver_distraction_model.keras')
-if not model_file.exists():
-    with st.spinner("🔄 Downloading AI model from Google Drive (first time only, ~2-5 minutes)..."):
-        from download_models import download_distraction_model
-        if not download_distraction_model():
-            st.error("❌ Failed to download model. Please check your internet connection and try again.")
+# Check and download large distraction model if needed
+# Small models (drowsiness) are already in the repo
+distract_model = Path('models/driver_distraction_model.keras')
+
+if not distract_model.exists():
+    st.info("🔄 First-time setup: Downloading AI model from Google Drive...")
+    st.info("📦 Size: ~400 MB | ⏱️ Time: 2-5 minutes")
+    
+    with st.spinner("⏳ Downloading... Please wait..."):
+        try:
+            from download_models import download_distraction_model
+            if download_distraction_model():
+                st.success("✅ Model downloaded successfully!")
+                st.balloons()
+                time.sleep(2)
+                st.rerun()
+            else:
+                st.error("❌ Failed to download model. Please refresh the page to try again.")
+                st.info("💡 Make sure you have a stable internet connection.")
+                st.stop()
+        except Exception as e:
+            st.error(f"❌ Download error: {e}")
+            st.info("💡 Please refresh the page to try again.")
             st.stop()
 
 # Import custom modules
