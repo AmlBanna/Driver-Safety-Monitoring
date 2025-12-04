@@ -1,0 +1,7 @@
+# This file ensures the models/ directory is tracked by Git
+# Place your model files here:
+# - improved_cnn_best.keras (drowsiness detection)
+# - driver_distraction_model.keras (download from Google Drive)
+# - class_indices.json
+# - deploy.prototxt (optional)
+# - res10_300x300_ssd_iter_140000.caffemodel (optional)
