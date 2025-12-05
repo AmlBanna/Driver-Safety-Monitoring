@@ -1,104 +1,121 @@
 #!/usr/bin/env python3
 """
-Auto-download large distraction model from Google Drive
-Small models (drowsiness) are already on GitHub
+Download large distraction model from GitHub LFS or Google Drive
 """
 
 import os
 from pathlib import Path
 import requests
+from tqdm import tqdm
 
-def download_file_from_google_drive(file_id, destination):
-    """Download file from Google Drive"""
-    
-    def get_confirm_token(response):
-        for key, value in response.cookies.items():
-            if key.startswith('download_warning'):
-                return value
-        return None
-
-    def save_response_content(response, destination):
-        CHUNK_SIZE = 32768
-        total_size = int(response.headers.get('content-length', 0))
-        downloaded = 0
-        
-        print(f"📦 File size: {total_size / (1024*1024):.1f} MB")
-        
-        with open(destination, "wb") as f:
-            for chunk in response.iter_content(CHUNK_SIZE):
-                if chunk:
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if total_size > 0:
-                        percent = (downloaded / total_size) * 100
-                        print(f"\r⏳ Downloading: {percent:.1f}% ({downloaded/(1024*1024):.1f}/{total_size/(1024*1024):.1f} MB)", 
-                              end='', flush=True)
-        print("\n✅ Download complete!")
-
-    URL = "https://docs.google.com/uc?export=download&confirm=1"
-    session = requests.Session()
-
-    response = session.get(URL, params={'id': file_id}, stream=True)
-    token = get_confirm_token(response)
-
-    if token:
-        params = {'id': file_id, 'confirm': token}
-        response = session.get(URL, params=params, stream=True)
-
-    save_response_content(response, destination)
-
-def download_distraction_model():
-    """Download the large distraction detection model from Google Drive"""
-    
+def download_from_github_lfs():
+    """Download model from GitHub LFS"""
     model_path = Path('models/driver_distraction_model.keras')
     
-    # Check if model already exists
     if model_path.exists():
-        file_size = model_path.stat().st_size / (1024 * 1024)  # MB
-        print(f"✅ Distraction model already exists: {model_path} ({file_size:.1f} MB)")
+        file_size = model_path.stat().st_size / (1024 * 1024)
+        print(f"✅ Model already exists: {file_size:.1f} MB")
         return True
     
     print("="*60)
-    print("📥 DOWNLOADING DISTRACTION DETECTION MODEL")
-    print("="*60)
-    print("🔗 Source: Google Drive")
-    print("📦 Expected size: ~400 MB")
-    print("⏱️ Estimated time: 2-5 minutes")
+    print("📥 DOWNLOADING FROM GITHUB LFS")
     print("="*60)
     
-    # Google Drive file ID from your link
-    file_id = '1QE5Z84JU4b0N0MlZtaLsdFt60nIXzt3Z'
+    # GitHub raw URL for LFS file
+    url = "https://github.com/AmlBanna/Driver-Safety-Monitoring/raw/main/models/driver_distraction_model.keras"
     
     try:
-        # Create models directory if not exists
         model_path.parent.mkdir(parents=True, exist_ok=True)
         
-        # Download
-        download_file_from_google_drive(file_id, str(model_path))
+        print(f"🔗 URL: {url}")
+        print("⏳ Downloading... (this may take 3-7 minutes)")
         
-        # Verify download
+        response = requests.get(url, stream=True, timeout=300)
+        response.raise_for_status()
+        
+        total_size = int(response.headers.get('content-length', 0))
+        
+        with open(model_path, 'wb') as f:
+            if total_size > 0:
+                downloaded = 0
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        percent = (downloaded / total_size) * 100
+                        print(f"\r⏳ Progress: {percent:.1f}% ({downloaded/(1024*1024):.1f}/{total_size/(1024*1024):.1f} MB)", 
+                              end='', flush=True)
+                print()
+            else:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+        
+        # Verify
         if model_path.exists():
-            file_size = model_path.stat().st_size / (1024 * 1024)  # MB
-            if file_size > 10:  # At least 10MB
-                print(f"✅ Model downloaded successfully: {model_path}")
-                print(f"📦 Final size: {file_size:.1f} MB")
+            file_size = model_path.stat().st_size / (1024 * 1024)
+            if file_size > 50:  # At least 50MB
+                print(f"✅ Downloaded successfully: {file_size:.1f} MB")
                 return True
             else:
-                print(f"❌ Downloaded file is too small ({file_size:.1f} MB)")
-                print("⚠️ The file might be corrupted. Please try again.")
+                print(f"❌ File too small: {file_size:.1f} MB")
+                os.remove(model_path)
                 return False
-        else:
-            print("❌ Download failed - file not found after download")
-            return False
-            
+        
+        return False
+        
     except Exception as e:
-        print(f"❌ Error downloading model: {e}")
-        print("💡 Tip: Check your internet connection and try again")
+        print(f"\n❌ GitHub download failed: {e}")
         return False
 
+def download_from_google_drive():
+    """Fallback: Download from Google Drive"""
+    model_path = Path('models/driver_distraction_model.keras')
+    
+    if model_path.exists():
+        return True
+    
+    print("\n" + "="*60)
+    print("📥 FALLBACK: DOWNLOADING FROM GOOGLE DRIVE")
+    print("="*60)
+    
+    try:
+        import gdown
+        
+        file_id = '1QE5Z84JU4b0N0MlZtaLsdFt60nIXzt3Z'
+        url = f'https://drive.google.com/uc?id={file_id}'
+        
+        print("⏳ Downloading from Drive...")
+        gdown.download(url, str(model_path), quiet=False)
+        
+        if model_path.exists():
+            file_size = model_path.stat().st_size / (1024 * 1024)
+            if file_size > 50:
+                print(f"✅ Downloaded from Drive: {file_size:.1f} MB")
+                return True
+        
+        return False
+        
+    except ImportError:
+        print("❌ gdown not installed")
+        return False
+    except Exception as e:
+        print(f"❌ Drive download failed: {e}")
+        return False
+
+def download_distraction_model():
+    """Try GitHub first, then Drive as fallback"""
+    
+    # Try GitHub LFS
+    if download_from_github_lfs():
+        return True
+    
+    # Fallback to Drive
+    print("\n🔄 Trying Google Drive as fallback...")
+    return download_from_google_drive()
+
 if __name__ == "__main__":
-    success = download_distraction_model()
-    if success:
-        print("\n🎉 All models ready! You can now run the app.")
+    if download_distraction_model():
+        print("\n🎉 Model ready!")
     else:
-        print("\n⚠️ Download failed. Please check the error above and try again.")
+        print("\n⚠️ Download failed from all sources")
