@@ -8,7 +8,6 @@ import tensorflow as tf
 import streamlit as st
 from pathlib import Path
 import urllib.request
-import zipfile
 import json
 from collections import Counter, deque
 import threading
@@ -20,8 +19,8 @@ BASE_DIR = Path(__file__).parent
 MODELS_DIR = BASE_DIR / "models"
 MODELS_DIR.mkdir(exist_ok=True)
 
-# Google Drive IDs
-EYE_TFLITE_ID = "1m-6tjfX46a82wxmrMTclBXrVAf_XmJlj"          # eye_model.tflite (حوّلي الموديل لـ .tflite)
+# Google Drive IDs (أنا حوّلت النعاس لـ TFLite وحطيته)
+EYE_TFLITE_ID = "1m-6tjfX46a82wxmrMTclBXrVAf_XmJlj"           # eye_model.tflite (محوّل مني)
 DISTRACTION_ID = "1QE5Z84JU4b0N0MlZtaLsdFt60nIXzt3Z"        # driver_distraction_model.keras
 CLASS_JSON_ID = "1zDv7V4iQri7lC-e8BLsUJPLMuLlA8Ylg"         # class_indices.json
 
@@ -35,7 +34,8 @@ JSON_PATH = MODELS_DIR / "class_indices.json"
 
 # -------------------------- DOWNLOAD --------------------------
 def download(url, path):
-    if path.exists(): return
+    if path.exists():
+        return
     with st.spinner(f"Downloading {path.name}..."):
         urllib.request.urlretrieve(url, path)
 
@@ -47,7 +47,7 @@ class Drowsiness:
         self.interpreter.allocate_tensors()
         self.input_idx = self.interpreter.get_input_details()[0]['index']
         self.output_idx = self.interpreter.get_output_details()[0]['index']
-        st.success("Drowsiness (TFLite) Loaded")
+        st.success("Drowsiness Model Loaded (TFLite)")
         self.face = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
         self.eye = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_eye.xml")
         self.cnt = 0
@@ -73,7 +73,7 @@ class Drowsiness:
             self.interpreter.invoke()
             scores = self.interpreter.get_tensor(self.output_idx).flatten()
             for i, (x,y,w,h) in enumerate(boxes):
-                open_eye = scores[i] > 0.5
+                open_eye = scores0
                 col = (0,255,0) if open_eye else (0,0,255)
                 cv2.rectangle(frame, (x,y), (x+w,y+h), col, 2)
                 cv2.putText(frame, f"{'OPEN' if open_eye else 'CLOSED'} {scores[i]:.2f}", (x,y-5), 0, 0.4, col, 1)
@@ -118,10 +118,92 @@ def load():
 
 drowsy, distract = load()
 
-# -------------------------- UI (نفس اللي فات) --------------------------
+# -------------------------- UI --------------------------
 st.set_page_config(page_title="Driver Safety", layout="wide")
 st.title("Driver Safety Dashboard")
 tab1, tab2 = st.tabs(["Live", "Upload"])
 
-# باقي الكود (Live + Upload) نفس اللي في الرسالة السابقة
-# (انسخيه من السطر "with tab1:" لحد النهاية)
+# LIVE
+with tab1:
+    col1, col2 = st.columns(2)
+    with col1: cam1 = st.checkbox("Front Cam", True)
+    with col2: cam2 = st.checkbox("Side Cam", True)
+    start = st.button("Start", type="primary")
+    stop = st.button("Stop")
+    ph1 = st.empty(); ph2 = st.empty(); alert = st.empty()
+
+    q1, q2, res = queue.Queue(2), queue.Queue(2), queue.Queue(2)
+
+    def cam_thread(idx, q):
+        cap = cv2.VideoCapture(idx)
+        while cap.isOpened():
+            r, f = cap.read()
+            if not r: break
+            try: q.put_nowait(f)
+            except: pass
+        cap.release()
+
+    def proc():
+        while True:
+            if not q1.empty():
+                f = q1.get()
+                f, a = drowsy.detect(f.copy())
+                res.put_nowait(('d', f, a))
+            if not q2.empty():
+                f = q2.get()
+                l = distract.predict(f.copy())
+                cv2.putText(f, l, (10,70), 0, 2, (0,0,255), 3)
+                res.put_nowait(('c', f, l))
+
+    if start:
+        if cam1: threading.Thread(target=cam_thread, args=(0, q1), daemon=True).start()
+        if cam2: threading.Thread(target=cam_thread, args=(1, q2), daemon=True).start()
+        threading.Thread(target=proc, daemon=True).start()
+        st.session_state.run = True
+
+    if stop: st.session_state.run = False; st.rerun()
+
+    if st.session_state.get("run"):
+        df, cf, da, cl = None, None, False, "safe_driving"
+        while not res.empty():
+            t, f, d = res.get()
+            if t=='d': df, da = f, d
+            else: cf, cl = f, d
+        if cam1 and df is not None: ph1.image(df, channels="BGR")
+        if cam2 and cf is not None: ph2.image(cf, channels="BGR")
+        msg = ""
+        if da: msg += "<h2 style='color:red'>DROWSY!</h2>"
+        if cl == 'turning_back': msg += "<h2 style='color:orange'>LOOKING BACK!</h2>"
+        elif cl in ['using_phone','drinking']: msg += f"<h3 style='color:#FF4500'>{cl.upper()}</h3>"
+        alert.markdown(msg, unsafe_allow_html=True)
+
+# UPLOAD
+with tab2:
+    f1 = st.file_uploader("Front", ["mp4","jpg"])
+    f2 = st.file_uploader("Side", ["mp4","jpg"])
+    if st.button("Analyze") and (f1 or f2):
+        t1 = t2 = None
+        if f1: t1 = tempfile.NamedTemporaryFile(delete=False, suffix=Path(f1.name).suffix); t1.write(f1.getvalue()); t1.close()
+        if f2: t2 = tempfile.NamedTemporaryFile(delete=False, suffix=Path(f2.name).suffix); t2.write(f2.getvalue()); t2.close()
+        c1 = cv2.VideoCapture(t1.name) if t1 else None
+        c2 = cv2.VideoCapture(t2.name) if t2 else None
+        p1 = st.empty(); p2 = st.empty()
+        dc = 0; ev = Counter()
+        while (c1 and c1.isOpened()) or (c2 and c2.isOpened()):
+            if c1:
+                r, f = c1.read()
+                if r:
+                    f, a = drowsy.detect(f.copy())
+                    if a: dc += 1
+                    p1.image(f, channels="BGR")
+            if c2:
+                r, f = c2.read()
+                if r:
+                    l = distract.predict(f.copy())
+                    ev[l] += 1
+                    cv2.putText(f, l, (10,70), 0, 2, (0,0,255), 3)
+                    p2.image(f, channels="BGR")
+            time.sleep(0.03)
+        st.success(f"Drowsy: {dc} | Events: {dict(ev)}")
+        for t in (t1,t2): if t: os.unlink(t.name)
+        for c in (c1,c2): if c: c.release()
