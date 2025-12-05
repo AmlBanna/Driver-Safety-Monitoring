@@ -45,8 +45,14 @@ def download_model():
 # -------------------------- DROWSINESS (Keras مباشرة) --------------------------
 class DrowsinessDetector:
     def __init__(self):
-        self.model = tf.keras.models.load_model(str(EYE_MODEL_PATH))
-        st.success("Drowsiness model loaded (Keras)")
+        if not EYE_MODEL_PATH.exists():
+            st.error("Folder 'eye_model' not found! Upload it to GitHub.")
+            st.stop()
+        
+        # تحميل SavedModel
+        self.model = tf.saved_model.load(str(EYE_MODEL_PATH))
+        self.predict_fn = self.model.signatures["serving_default"]
+        st.success("Drowsiness model loaded (SavedModel)")
 
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
         self.eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_eye.xml")
@@ -84,7 +90,12 @@ class DrowsinessDetector:
         preds = np.array([])
         if eye_imgs:
             batch = np.stack(eye_imgs)
-            preds = self.model.predict(batch, verbose=0).flatten()
+            # تنبؤ باستخدام SavedModel
+            input_tensor = tf.constant(batch)
+            output = self.predict_fn(input_tensor)
+            # المخرج عادةً يكون في مفتاح زي 'output_0' أو 'dense'
+            pred_key = list(output.keys())[0]
+            preds = output[pred_key].numpy().flatten()
 
         drowsy = False
         for i, (pred, (x, y, w, h)) in enumerate(zip(preds, eye_boxes)):
@@ -104,7 +115,6 @@ class DrowsinessDetector:
 
         alert = self.closed_cnt >= self.THRESH
         return frame, alert, self.closed_cnt
-
 # -------------------------- DISTRACTION --------------------------
 class DistractionClassifier:
     def __init__(self):
