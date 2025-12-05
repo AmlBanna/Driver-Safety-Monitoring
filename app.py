@@ -28,7 +28,7 @@ DROWSINESS_DIR = BASE_DIR / "drowsiness"
 DISTRACTION_DIR = BASE_DIR / "distraction"
 
 # Models
-EYE_MODEL_PATH = DROWSINESS_DIR / "improved_cnn_best.keras"           # ← ملفك
+EYE_MODEL_PATH = BASE_DIR / "eye_model"   # ← مجلد من export
 DISTRACTION_MODEL_PATH = DISTRACTION_DIR / "driver_distraction_model.keras"
 CLASS_IDX_PATH = DISTRACTION_DIR / "class_indices.json"
 
