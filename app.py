@@ -1,315 +1,215 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""
-Driver Safety Dashboard – Drowsiness + Distraction
-All models loaded from Google Drive
-No large files in repo | Works on Streamlit Cloud
-"""
-
 import os
 import cv2
 import numpy as np
 import tensorflow as tf
 import streamlit as st
 from pathlib import Path
-import time
-import json
-from collections import Counter, deque
-import tempfile
 import urllib.request
 import zipfile
+import json
+from collections import Counter, deque
 import threading
 import queue
-import io
+import time
 
 # -------------------------- CONFIG --------------------------
 BASE_DIR = Path(__file__).parent
 MODELS_DIR = BASE_DIR / "models"
 MODELS_DIR.mkdir(exist_ok=True)
 
-# === Google Drive IDs ===
-EYE_MODEL_ZIP_ID = "1m-6tjfX46a82wxmrMTclBXrVAf_XmJlj"           # ← موديل النعاس (zip)
-DISTRACTION_MODEL_ID = "1QE5Z84JU4b0N0MlZtaLsdFt60nIXzt3Z"      # ← driver_distraction_model.keras
-CLASS_JSON_ID = "1zDv7V4iQri7lC-e8BLsUJPLMuLlA8Ylg"              # ← class_indices.json
+# Google Drive IDs
+EYE_ZIP_ID = "1m-6tjfX46a82wxmrMTclBXrVAf_XmJlj"           # eye_model.zip
+DISTRACTION_ID = "1QE5Z84JU4b0N0MlZtaLsdFt60nIXzt3Z"     # driver_distraction_model.keras
+CLASS_JSON_ID = "1zDv7V4iQri7lC-e8BLsUJPLMuLlA8Ylg"      # class_indices.json
 
-# === Download URLs ===
-EYE_ZIP_URL = f"https://drive.google.com/uc?id={EYE_MODEL_ZIP_ID}&export=download"
-DISTRACTION_URL = f"https://drive.google.com/uc?id={DISTRACTION_MODEL_ID}&export=download"
+EYE_ZIP_URL = f"https://drive.google.com/uc?id={EYE_ZIP_ID}&export=download"
+DISTRACTION_URL = f"https://drive.google.com/uc?id={DISTRACTION_ID}&export=download"
 CLASS_JSON_URL = f"https://drive.google.com/uc?id={CLASS_JSON_ID}&export=download"
 
-# === Paths ===
 EYE_MODEL_PATH = MODELS_DIR / "eye_model"
 DISTRACTION_MODEL_PATH = MODELS_DIR / "driver_distraction_model.keras"
 CLASS_IDX_PATH = MODELS_DIR / "class_indices.json"
 
-# -------------------------- DOWNLOAD HELPERS --------------------------
-def download_file(url, dest):
-    if dest.exists():
-        return
-    with st.spinner(f"Downloading {dest.name}..."):
-        try:
-            req = urllib.request.urlopen(url)
-            with open(dest, "wb") as f:
-                f.write(req.read())
-        except Exception as e:
-            st.error(f"Download failed: {e}")
-            st.stop()
+# -------------------------- DOWNLOAD --------------------------
+def download(url, path):
+    if path.exists(): return
+    with st.spinner(f"Downloading {path.name}..."):
+        urllib.request.urlretrieve(url, path)
 
-def download_and_extract_eye_model():
+def extract_eye_model():
     zip_path = MODELS_DIR / "eye_model.zip"
     if not EYE_MODEL_PATH.exists():
-        download_file(EYE_ZIP_URL, zip_path)
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            zip_ref.extractall(MODELS_DIR)
+        download(EYE_ZIP_URL, zip_path)
+        with zipfile.ZipFile(zip_path, 'r') as z:
+            z.extractall(MODELS_DIR)
         zip_path.unlink()
-        st.success("Drowsiness model extracted")
 
-def download_class_json():
-    download_file(CLASS_JSON_URL, CLASS_IDX_PATH)
-
-# -------------------------- DROWSINESS DETECTOR --------------------------
-class DrowsinessDetector:
+# -------------------------- DROWSINESS --------------------------
+class Drowsiness:
     def __init__(self):
-        download_and_extract_eye_model()
-        if not EYE_MODEL_PATH.exists():
-            st.error("Failed to load drowsiness model!")
-            st.stop()
+        extract_eye_model()
         self.model = tf.saved_model.load(str(EYE_MODEL_PATH))
-        self.predict_fn = self.model.signatures["serving_default"]
-        st.success("Drowsiness model ready")
-
-        self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-        self.eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_eye.xml")
-        self.closed_cnt = 0
+        self.fn = self.model.signatures["serving_default"]
+        st.success("Drowsiness Model Loaded")
+        self.face = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+        self.eye = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_eye.xml")
+        self.cnt = 0
         self.THRESH = 5
-        self.INPUT_SIZE = (48, 48)
-
-    def preprocess_eye(self, eye):
-        eye = cv2.resize(eye, self.INPUT_SIZE)
-        eye = eye.astype(np.float32) / 255.0
-        return np.expand_dims(eye, axis=-1)
 
     def detect(self, frame):
+        gray = cv2.cvtColor(cv2.resize(frame, (0,0), fx=0.7, fy=0.7), cv2.COLOR_BGR2GRAY)
+        faces = self.face.detectMultiScale(gray, 1.1, 5, minSize=(80,80))
+        eyes, preds = [], []
         h, w = frame.shape[:2]
-        small = cv2.resize(frame, (0, 0), fx=0.7, fy=0.7)
-        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-        faces = self.face_cascade.detectMultiScale(gray, 1.1, 5, minSize=(80, 80))
-        eye_boxes, eye_imgs = [], []
-
-        for (x, y, fw, fh) in faces:
+        for (x,y,fw,fh) in faces:
             roi = gray[y:y+int(fh*0.65), x:x+fw]
-            eyes = self.eye_cascade.detectMultiScale(roi, 1.05, 4, minSize=(20,20))
-            for (ex, ey, ew, eh) in eyes:
+            es = self.eye.detectMultiScale(roi, 1.05, 4, minSize=(20,20))
+            for (ex,ey,ew,eh) in es:
                 if ey > roi.shape[0]*0.55: continue
-                eye = roi[ey:ey+eh, ex:ex+ew]
-                if min(ew, eh) < 18: continue
-                eye_imgs.append(self.preprocess_eye(eye))
-                sx = w / small.shape[1]
-                sy = h / small.shape[0]
-                eye_boxes.append((int((x+ex)*sx), int((y+ey)*sy), int(ew*sx), int(eh*sy)))
+                eye_img = cv2.resize(roi[ey:ey+eh, ex:ex+ew], (48,48)) / 255.0
+                eyes.append(np.expand_dims(eye_img, -1))
+                sx = w / gray.shape[1]; sy = h / gray.shape[0]
+                preds.append((int((x+ex)*sx), int((y+ey)*sy), int(ew*sx), int(eh*sy)))
+        if eyes:
+            batch = np.stack(eyes).astype(np.float32)
+            out = self.fn(tf.constant(batch))
+            key = list(out.keys())[0]
+            scores = out[key].numpy().flatten()
+            for i, (x,y,w,h) in enumerate(preds):
+                open_eye = scores[i] > 0.5
+                col = (0,255,0) if open_eye else (0,0,255)
+                cv2.rectangle(frame, (x,y), (x+w,y+h), col, 2)
+                cv2.putText(frame, f"{'OPEN' if open_eye else 'CLOSED'} {scores[i]:.2f}", (x,y-5), 0, 0.4, col, 1)
+                if not open_eye: self.cnt += 1
+                else: self.cnt = max(0, self.cnt-1)
+        return frame, self.cnt >= self.THRESH
 
-        preds = np.array([])
-        if eye_imgs:
-            batch = np.stack(eye_imgs)
-            output = self.predict_fn(tf.constant(batch))
-            pred_key = list(output.keys())[0]
-            preds = output[pred_key].numpy().flatten()
-
-        drowsy = False
-        for i, (pred, (x, y, w, h)) in enumerate(zip(preds, eye_boxes)):
-            is_open = pred > 0.5
-            conf = pred if is_open else 1-pred
-            color = (0, 255, 0) if is_open else (0, 0, 255)
-            label = f"{'OPEN' if is_open else 'CLOSED'} {conf:.2f}"
-            cv2.rectangle(frame, (x, y), (x+w, y+h), color, 2)
-            cv2.putText(frame, label, (x, y-8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-            if not is_open: drowsy = True
-
-        if drowsy: self.closed_cnt += 1
-        elif eye_boxes: self.closed_cnt = max(0, self.closed_cnt - 1)
-        return frame, self.closed_cnt >= self.THRESH, self.closed_cnt
-
-# -------------------------- DISTRACTION CLASSIFIER --------------------------
-class DistractionClassifier:
+# -------------------------- DISTRACTION --------------------------
+class Distraction:
     def __init__(self):
-        download_file(DISTRACTION_URL, DISTRACTION_MODEL_PATH)
-        download_class_json()
+        download(DISTRACTION_URL, DISTRACTION_MODEL_PATH)
+        download(CLASS_JSON_URL, CLASS_IDX_PATH)
         self.model = tf.keras.models.load_model(str(DISTRACTION_MODEL_PATH))
-        with open(CLASS_IDX_PATH) as f:
-            idx = json.load(f)
-        self.idx2cls = {v: k for k, v in idx.items()}
-        self.history = deque(maxlen=8)
-        self.frame_cnt = 0
-        st.success("Distraction model ready")
+        with open(CLASS_IDX_PATH) as f: idx = json.load(f)
+        self.idx2cls = {v:k for k,v in idx.items()}
+        self.hist = deque(maxlen=8)
+        self.skip = 0
+        st.success("Distraction Model Loaded")
 
     def predict(self, frame):
-        self.frame_cnt += 1
-        if self.frame_cnt % 2 != 0:
-            return self.history[-1] if self.history else ('safe_driving', 0.7)
+        self.skip = (self.skip + 1) % 2
+        if self.skip: return self.hist[-1] if self.hist else "safe_driving"
+        x = tf.convert_to_tensor(np.expand_dims(cv2.resize(frame, (224,224))/255.0, 0).astype(np.float32))
+        p = self.model(x, training=False)[0].numpy()
+        cls = self.idx2cls[np.argmax(p)]
+        conf = p.max()
+        label = (
+            'drinking' if cls=='c6' and conf>0.3 else
+            'using_phone' if cls in ['c1','c2','c3','c4','c9'] and conf>0.28 else
+            'safe_driving' if cls=='c0' and conf>0.5 else
+            'turning_back' if cls=='c7' and conf>0.7 else
+            'hair_makeup' if cls=='c8' and conf>0.8 else
+            'radio' if cls=='c5' and conf>0.6 else 'other'
+        )
+        self.hist.append(label)
+        return Counter(self.hist).most_common(1)[0][0] if len(self.hist)>=3 else label
 
-        x = tf.convert_to_tensor(np.expand_dims(cv2.resize(frame, (224,224)).astype(np.float32)/255.0, 0))
-        pred = self.model(x, training=False)[0].numpy()
-        idx = np.argmax(pred)
-        label = self._final_label(self.idx2cls[idx], pred[idx])
-        self.history.append(label)
-        return Counter(self.history).most_common(1)[0][0] if len(self.history) >= 3 else label, pred[idx]
-
-    def _final_label(self, cls, conf):
-        if cls == 'c6' and conf > 0.30: return 'drinking'
-        if cls in ['c1','c2','c3','c4','c9'] and conf > 0.28: return 'using_phone'
-        if cls == 'c0' and conf > 0.5: return 'safe_driving'
-        if cls == 'c7' and conf > 0.7: return 'turning_back'
-        if cls == 'c8' and conf > 0.8: return 'hair_makeup'
-        if cls == 'c5' and conf > 0.6: return 'radio'
-        return 'other'
-
-# -------------------------- LOAD MODELS --------------------------
+# -------------------------- LOAD --------------------------
 @st.cache_resource
-def load_models():
-    d = DrowsinessDetector()
-    c = DistractionClassifier()
-    return d, c
+def load():
+    return Drowsiness(), Distraction()
 
-drowsiness, distraction = load_models()
-
-# -------------------------- THREADS & QUEUES --------------------------
-q_d = queue.Queue(maxsize=2)
-q_c = queue.Queue(maxsize=2)
-result_q = queue.Queue(maxsize=2)
-
-def cam_d_thread():
-    cap = cv2.VideoCapture(0)
-    while cap.isOpened():
-        ret, f = cap.read()
-        if not ret: break
-        try: q_d.put_nowait(f)
-        except: pass
-    cap.release()
-
-def cam_c_thread():
-    cap = cv2.VideoCapture(1)
-    while cap.isOpened():
-        ret, f = cap.read()
-        if not ret: break
-        try: q_c.put_nowait(f)
-        except: pass
-    cap.release()
-
-def processor():
-    while True:
-        if not q_d.empty():
-            f = q_d.get()
-            f, alert, _ = drowsiness.detect(f.copy())
-            result_q.put_nowait(('d', f, alert))
-        if not q_c.empty():
-            f = q_c.get()
-            label, _ = distraction.predict(f.copy())
-            cv2.putText(f, label, (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 2, (0,0,255), 4)
-            result_q.put_nowait(('c', f, label))
+drowsy, distract = load()
 
 # -------------------------- UI --------------------------
-st.set_page_config(page_title="Driver Safety Dashboard", layout="wide")
+st.set_page_config(page_title="Driver Safety", layout="wide")
 st.title("Driver Safety Dashboard")
-st.markdown("**Real-time drowsiness + distraction detection**")
+tab1, tab2 = st.tabs(["Live", "Upload"])
 
-tab1, tab2 = st.tabs(["Live Cameras", "Upload Media"])
-
-# ========= LIVE =========
+# LIVE
 with tab1:
-    c1, c2 = st.columns(2)
-    with c1: cam_d = st.checkbox("Front (Drowsiness)", True)
-    with c2: cam_c = st.checkbox("Side (Distraction)", True)
-
-    start = st.button("Start Live", type="primary")
+    col1, col2 = st.columns(2)
+    with col1: cam1 = st.checkbox("Front Cam", True)
+    with col2: cam2 = st.checkbox("Side Cam", True)
+    start = st.button("Start", type="primary")
     stop = st.button("Stop")
+    ph1 = st.empty(); ph2 = st.empty(); alert = st.empty()
 
-    ph_d = st.empty()
-    ph_c = st.empty()
-    alert_ph = st.empty()
-    score_ph = st.empty()
+    q1, q2, res = queue.Queue(2), queue.Queue(2), queue.Queue(2)
+
+    def cam_thread(idx, q):
+        cap = cv2.VideoCapture(idx)
+        while cap.isOpened():
+            r, f = cap.read()
+            if not r: break
+            try: q.put_nowait(f)
+            except: pass
+        cap.release()
+
+    def proc():
+        while True:
+            if not q1.empty():
+                f = q1.get()
+                f, a = drowsy.detect(f.copy())
+                res.put_nowait(('d', f, a))
+            if not q2.empty():
+                f = q2.get()
+                l = distract.predict(f.copy())
+                cv2.putText(f, l, (10,70), 0, 2, (0,0,255), 3)
+                res.put_nowait(('c', f, l))
 
     if start:
-        if cam_d: threading.Thread(target=cam_d_thread, daemon=True).start()
-        if cam_c: threading.Thread(target=cam_c_thread, daemon=True).start()
-        threading.Thread(target=processor, daemon=True).start()
-        st.session_state.live = True
+        if cam1: threading.Thread(target=cam_thread, args=(0, q1), daemon=True).start()
+        if cam2: threading.Thread(target=cam_thread, args=(1, q2), daemon=True).start()
+        threading.Thread(target=proc, daemon=True).start()
+        st.session_state.run = True
 
-    if stop and st.session_state.get("live"):
-        st.session_state.live = False
-        st.rerun()
+    if stop: st.session_state.run = False; st.rerun()
 
-    if st.session_state.get("live"):
-        d_frame, c_frame = None, None
-        d_alert, c_label = False, "safe_driving"
-
-        while not result_q.empty():
-            typ, f, data = result_q.get()
-            if typ == 'd': d_frame, d_alert = f, data
-            else: c_frame, c_label = f, data
-
-        if cam_d and d_frame is not None:
-            ph_d.image(d_frame, channels="BGR", caption="Front – Drowsiness")
-        if cam_c and c_frame is not None:
-            ph_c.image(c_frame, channels="BGR", caption="Side – Distraction")
-
+    if st.session_state.get("run"):
+        df, cf, da, cl = None, None, False, "safe_driving"
+        while not res.empty():
+            t, f, d = res.get()
+            if t=='d': df, da = f, d
+            else: cf, cl = f, d
+        if cam1 and df is not None: ph1.image(df, channels="BGR")
+        if cam2 and cf is not None: ph2.image(cf, channels="BGR")
         msg = ""
-        if d_alert:
-            msg += "<h2 style='color:red;text-align:center;'>DROWSY!</h2>"
-        if c_label == 'turning_back':
-            msg += "<h2 style='color:orange;text-align:center;'>LOOKING BACK!</h2>"
-        elif c_label in ['using_phone', 'drinking']:
-            msg += f"<h3 style='color:#FF4500;text-align:center;'>ALERT: {c_label.upper()}</h3>"
-        alert_ph.markdown(msg, unsafe_allow_html=True)
+        if da: msg += "<h2 style='color:red'>DROWSY!</h2>"
+        if cl == 'turning_back': msg += "<h2 style='color:orange'>LOOKING BACK!</h2>"
+        elif cl in ['using_phone','drinking']: msg += f"<h3 style='color:#FF4500'>{cl.upper()}</h3>"
+        alert.markdown(msg, unsafe_allow_html=True)
 
-        safe = not d_alert and c_label == 'safe_driving'
-        score_ph.metric("Safety Score", f"{100 if safe else 0} %")
-
-# ========= UPLOAD =========
+# UPLOAD
 with tab2:
-    col1, col2 = st.columns(2)
-    with col1: f_d = st.file_uploader("Front Video/Image", ["mp4","avi","jpg","png"])
-    with col2: f_c = st.file_uploader("Side Video/Image", ["mp4","avi","jpg","png"])
-
-    if st.button("Analyze", type="primary") and (f_d or f_c):
-        tmp_d = tmp_c = None
-        if f_d:
-            tmp_d = tempfile.NamedTemporaryFile(delete=False, suffix=Path(f_d.name).suffix)
-            tmp_d.write(f_d.getvalue()); tmp_d.close()
-        if f_c:
-            tmp_c = tempfile.NamedTemporaryFile(delete=False, suffix=Path(f_c.name).suffix)
-            tmp_c.write(f_c.getvalue()); tmp_c.close()
-
-        cap_d = cv2.VideoCapture(tmp_d.name) if tmp_d else None
-        cap_c = cv2.VideoCapture(tmp_c.name) if tmp_c else None
-
-        ph_d = st.empty()
-        ph_c = st.empty()
-        alert_ph = st.empty()
-
-        drowsy_count = 0
-        events = Counter()
-
-        while (cap_d and cap_d.isOpened()) or (cap_c and cap_c.isOpened()):
-            if cap_d:
-                ret, frame = cap_d.read()
-                if ret:
-                    frame, alert, _ = drowsiness.detect(frame.copy())
-                    if alert: drowsy_count += 1
-                    ph_d.image(frame, channels="BGR")
-            if cap_c:
-                ret, frame = cap_c.read()
-                if ret:
-                    label, _ = distraction.predict(frame.copy())
-                    events[label] += 1
-                    cv2.putText(frame, label, (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 2, (0,0,255), 4)
-                    ph_c.image(frame, channels="BGR")
-
+    f1 = st.file_uploader("Front", ["mp4","jpg"])
+    f2 = st.file_uploader("Side", ["mp4","jpg"])
+    if st.button("Analyze") and (f1 or f2):
+        t1 = t2 = None
+        if f1: t1 = tempfile.NamedTemporaryFile(delete=False, suffix=Path(f1.name).suffix); t1.write(f1.getvalue()); t1.close()
+        if f2: t2 = tempfile.NamedTemporaryFile(delete=False, suffix=Path(f2.name).suffix); t2.write(f2.getvalue()); t2.close()
+        c1 = cv2.VideoCapture(t1.name) if t1 else None
+        c2 = cv2.VideoCapture(t2.name) if t2 else None
+        p1 = st.empty(); p2 = st.empty()
+        dc = 0; ev = Counter()
+        while (c1 and c1.isOpened()) or (c2 and c2.isOpened()):
+            if c1:
+                r, f = c1.read()
+                if r:
+                    f, a = drowsy.detect(f.copy())
+                    if a: dc += 1
+                    p1.image(f, channels="BGR")
+            if c2:
+                r, f = c2.read()
+                if r:
+                    l = distract.predict(f.copy())
+                    ev[l] += 1
+                    cv2.putText(f, l, (10,70), 0, 2, (0,0,255), 3)
+                    p2.image(f, channels="BGR")
             time.sleep(0.03)
-
-        st.success(f"Done! Drowsy: {drowsy_count} | Distractions: {dict(events)}")
-
-        for tmp in (tmp_d, tmp_c):
-            if tmp: os.unlink(tmp.name)
-        for cap in (cap_d, cap_c):
-            if cap: cap.release()
+        st.success(f"Drowsy: {dc} | Events: {dict(ev)}")
+        for t in (t1,t2): if t: os.unlink(t.name)
+        for c in (c1,c2): if c: c.release()
