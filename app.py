@@ -205,5 +205,9 @@ with tab2:
                     p2.image(f, channels="BGR")
             time.sleep(0.03)
         st.success(f"Drowsy: {dc} | Events: {dict(ev)}")
-        for t in (t1,t2): if t: os.unlink(t.name)
-        for c in (c1,c2): if c: c.release()
+        for t in (t1, t2):
+                    if t:
+                        os.unlink(t.name)
+                for c in (c1, c2):
+                    if c:
+                        c.release()
