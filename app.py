@@ -8,33 +8,27 @@ import time
 from pathlib import Path
 import tempfile
 from PIL import Image
+import os
 
-# Check and download large distraction model if needed
-# Small models (drowsiness) are already in the repo
+# Check and download large model
 distract_model = Path('models/driver_distraction_model.keras')
-
 if not distract_model.exists():
-    st.info("🔄 First-time setup: Downloading AI model from Google Drive...")
-    st.info("📦 Size: ~400 MB | ⏱️ Time: 2-5 minutes")
-    
-    with st.spinner("⏳ Downloading... Please wait..."):
+    st.info("🔄 First-time setup: Downloading AI model...")
+    with st.spinner("⏳ Downloading from GitHub (3-7 minutes)..."):
         try:
             from download_models import download_distraction_model
             if download_distraction_model():
-                st.success("✅ Model downloaded successfully!")
-                st.balloons()
-                time.sleep(2)
+                st.success("✅ Model ready!")
+                time.sleep(1)
                 st.rerun()
             else:
-                st.error("❌ Failed to download model. Please refresh the page to try again.")
-                st.info("💡 Make sure you have a stable internet connection.")
+                st.error("❌ Download failed. Please refresh page.")
                 st.stop()
         except Exception as e:
-            st.error(f"❌ Download error: {e}")
-            st.info("💡 Please refresh the page to try again.")
+            st.error(f"Error: {e}")
             st.stop()
 
-# Import custom modules
+# Import detectors
 from utils.drowsiness_detector import DrowsinessDetector
 from utils.distraction_detector import DistractionDetector
 from utils.alert_system import AlertSystem
@@ -43,64 +37,46 @@ from utils.alert_system import AlertSystem
 # PAGE CONFIG
 # ================================
 st.set_page_config(
-    page_title="Driver Safety Monitoring System",
+    page_title="Driver Safety Monitoring",
     page_icon="🚗",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
-# ================================
-# CUSTOM CSS
-# ================================
+# Custom CSS
 st.markdown("""
 <style>
     .main-header {
-        font-size: 3rem;
+        font-size: 2.5rem;
         font-weight: bold;
         text-align: center;
-        color: #1f77b4;
+        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
         margin-bottom: 1rem;
-    }
-    .sub-header {
-        font-size: 1.2rem;
-        text-align: center;
-        color: #555;
-        margin-bottom: 2rem;
-    }
-    .metric-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 20px;
-        border-radius: 10px;
-        color: white;
-        text-align: center;
     }
     .alert-critical {
         background-color: #dc3545;
         color: white;
-        padding: 20px;
-        border-radius: 10px;
-        font-size: 1.5rem;
+        padding: 15px;
+        border-radius: 8px;
+        font-size: 1.2rem;
         font-weight: bold;
         text-align: center;
         animation: pulse 1s infinite;
     }
     @keyframes pulse {
         0%, 100% { opacity: 1; }
-        50% { opacity: 0.7; }
+        50% { opacity: 0.6; }
     }
     .stButton>button {
         width: 100%;
-        background-color: #1f77b4;
-        color: white;
-        font-size: 1.1rem;
-        padding: 0.5rem;
         border-radius: 8px;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # ================================
-# INITIALIZE SESSION STATE
+# INITIALIZE
 # ================================
 if 'drowsy_detector' not in st.session_state:
     st.session_state.drowsy_detector = None
@@ -111,125 +87,25 @@ if 'alert_system' not in st.session_state:
 if 'processing' not in st.session_state:
     st.session_state.processing = False
 
-# ================================
-# LOAD MODELS
-# ================================
+# Load models
 @st.cache_resource
 def load_detectors():
-    st.info("🔄 Loading AI models... This may take a moment.")
-    drowsy = DrowsinessDetector()
-    distract = DistractionDetector()
-    st.success("✅ Models loaded successfully!")
-    return drowsy, distract
+    return DrowsinessDetector(), DistractionDetector()
 
-# ================================
-# HELPER FUNCTIONS
-# ================================
-def create_metrics_dashboard(stats):
-    """Create beautiful metrics display"""
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric("Total Events", stats['total_events'])
-    with col2:
-        st.metric("Critical Alerts", stats['critical_events'], 
-                 delta=f"-{stats['critical_events']}" if stats['critical_events'] > 0 else None,
-                 delta_color="inverse")
-    with col3:
-        st.metric("Safe Driving %", f"{stats['safe_percentage']:.1f}%",
-                 delta=f"+{stats['safe_percentage']:.1f}%" if stats['safe_percentage'] > 70 else None)
-    with col4:
-        st.metric("Avg Risk Level", f"{stats['avg_severity']:.1f}/10",
-                 delta_color="inverse")
-
-def create_severity_chart(alert_system):
-    """Create real-time severity chart"""
-    if not alert_system.alert_history:
-        return None
-    
-    history = alert_system.alert_history[-50:]  # Last 50 events
-    
-    fig = make_subplots(
-        rows=2, cols=1,
-        subplot_titles=('Drowsiness Severity', 'Distraction Severity'),
-        vertical_spacing=0.15
-    )
-    
-    # Drowsiness
-    fig.add_trace(
-        go.Scatter(
-            y=[h['drowsy_severity'] for h in history],
-            mode='lines+markers',
-            name='Drowsiness',
-            line=dict(color='#ff7f0e', width=2),
-            fill='tozeroy'
-        ),
-        row=1, col=1
-    )
-    
-    # Distraction
-    fig.add_trace(
-        go.Scatter(
-            y=[h['distraction_severity'] for h in history],
-            mode='lines+markers',
-            name='Distraction',
-            line=dict(color='#1f77b4', width=2),
-            fill='tozeroy'
-        ),
-        row=2, col=1
-    )
-    
-    fig.update_yaxes(range=[0, 10], title_text="Severity", row=1, col=1)
-    fig.update_yaxes(range=[0, 10], title_text="Severity", row=2, col=1)
-    fig.update_layout(height=400, showlegend=False)
-    
-    return fig
-
-def process_frame_combined(frame, drowsy_det, distract_det, alert_sys, camera_type):
-    """Process frame with both detectors"""
-    if camera_type == 'Front (Drowsiness)':
-        status, severity, annotated = drowsy_det.detect(frame)
-        alert_level, alert_msg, _ = alert_sys.evaluate(status, severity, 'safe_driving', 0)
-        return annotated, alert_level, alert_msg, severity
-    
-    elif camera_type == 'Side (Distraction)':
-        activity, severity, annotated = distract_det.detect(frame)
-        alert_level, alert_msg, _ = alert_sys.evaluate('safe', 0, activity, severity)
-        return annotated, alert_level, alert_msg, severity
-    
-    else:  # Both cameras
-        # Split frame horizontally
-        h, w = frame.shape[:2]
-        left_frame = frame[:, :w//2]
-        right_frame = frame[:, w//2:]
-        
-        # Process both
-        drowsy_status, drowsy_sev, drowsy_anno = drowsy_det.detect(left_frame)
-        distract_act, distract_sev, distract_anno = distract_det.detect(right_frame)
-        
-        # Combine frames
-        combined = np.hstack([drowsy_anno, distract_anno])
-        
-        # Get alert
-        alert_level, alert_msg, combined_sev = alert_sys.evaluate(
-            drowsy_status, drowsy_sev, distract_act, distract_sev
-        )
-        
-        return combined, alert_level, alert_msg, combined_sev
-
-# ================================
-# MAIN APP
-# ================================
-st.markdown('<div class="main-header">🚗 Driver Safety Monitoring System</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">AI-Powered Drowsiness & Distraction Detection</div>', unsafe_allow_html=True)
-
-# Load models
 if st.session_state.drowsy_detector is None:
-    st.session_state.drowsy_detector, st.session_state.distraction_detector = load_detectors()
+    with st.spinner("🔄 Loading AI models..."):
+        st.session_state.drowsy_detector, st.session_state.distraction_detector = load_detectors()
 
 drowsy_det = st.session_state.drowsy_detector
 distract_det = st.session_state.distraction_detector
 alert_sys = st.session_state.alert_system
+
+# ================================
+# HEADER
+# ================================
+st.markdown('<div class="main-header">🚗 Driver Safety Monitoring System</div>', unsafe_allow_html=True)
+st.markdown('<p style="text-align:center; color:#666;">Real-time Drowsiness & Distraction Detection with AI</p>', 
+            unsafe_allow_html=True)
 
 # ================================
 # SIDEBAR
@@ -237,35 +113,30 @@ alert_sys = st.session_state.alert_system
 with st.sidebar:
     st.header("⚙️ Configuration")
     
-    input_type = st.radio(
-        "Input Source",
-        ["📹 Live Camera", "📁 Upload Video", "🖼️ Upload Images"],
-        key="input_type"
+    mode = st.radio(
+        "Analysis Mode",
+        ["📹 Live Camera", "📁 Upload Videos (Dual)", "🖼️ Upload Images"],
+        key="mode"
     )
-    
-    if input_type == "📹 Live Camera":
-        camera_type = st.selectbox(
-            "Camera Type",
-            ["Front (Drowsiness)", "Side (Distraction)", "Both Cameras"],
-            key="camera_type"
-        )
-    else:
-        camera_type = st.selectbox(
-            "Analysis Type",
-            ["Front (Drowsiness)", "Side (Distraction)", "Both Cameras"],
-            key="analysis_type"
-        )
     
     st.divider()
     
-    # Statistics
-    st.header("📊 Live Statistics")
-    stats = alert_sys.get_statistics()
-    st.metric("Total Frames", stats['total_events'])
-    st.metric("Critical Alerts", stats['critical_events'])
-    st.metric("Safe %", f"{stats['safe_percentage']:.1f}%")
+    # Audio alert toggle
+    audio_alert = st.checkbox("🔊 Audio Alerts", value=True)
     
-    if st.button("🔄 Reset Statistics"):
+    # Sensitivity
+    sensitivity = st.slider("Alert Sensitivity", 1, 10, 5)
+    
+    st.divider()
+    
+    # Stats
+    st.header("📊 Session Stats")
+    stats = alert_sys.get_statistics()
+    st.metric("Total Events", stats['total_events'])
+    st.metric("Critical Alerts", stats['critical_events'])
+    st.metric("Safe Driving %", f"{stats['safe_percentage']:.1f}%")
+    
+    if st.button("🔄 Reset Stats"):
         alert_sys.reset()
         drowsy_det.reset()
         distract_det.reset()
@@ -275,201 +146,226 @@ with st.sidebar:
 # MAIN CONTENT
 # ================================
 
-# === LIVE CAMERA ===
-if input_type == "📹 Live Camera":
-    st.subheader("🔴 Live Camera Feed")
+if mode == "📹 Live Camera":
+    st.warning("⚠️ Live camera only works locally. Use 'Upload Videos' mode for cloud deployment.")
     
-    col1, col2 = st.columns([3, 1])
+    camera_idx = st.number_input("Camera Index", 0, 5, 0)
+    
+    col1, col2 = st.columns(2)
     
     with col1:
-        frame_placeholder = st.empty()
+        st.subheader("Front Camera (Drowsiness)")
+        front_frame = st.empty()
     
     with col2:
-        alert_placeholder = st.empty()
-        severity_placeholder = st.empty()
+        st.subheader("Side Camera (Distraction)")
+        side_frame = st.empty()
     
-    chart_placeholder = st.empty()
+    alert_placeholder = st.empty()
     
-    start_btn = st.button("▶️ Start Monitoring", use_container_width=True)
-    stop_btn = st.button("⏹️ Stop Monitoring", use_container_width=True)
+    start = st.button("▶️ Start Monitoring")
+    stop = st.button("⏹️ Stop Monitoring")
     
-    if start_btn:
+    if start:
         st.session_state.processing = True
-    if stop_btn:
+    if stop:
         st.session_state.processing = False
     
     if st.session_state.processing:
-        cap = cv2.VideoCapture(0)
+        cap = cv2.VideoCapture(camera_idx)
         
-        if not cap.isOpened():
-            st.error("❌ Cannot access camera. Please check permissions.")
-            st.session_state.processing = False
-        else:
-            fps_time = time.time()
-            fps = 0
+        while st.session_state.processing:
+            ret, frame = cap.read()
+            if not ret:
+                break
             
-            while st.session_state.processing:
-                ret, frame = cap.read()
-                if not ret:
-                    st.warning("⚠️ Failed to read frame")
-                    break
-                
-                # Process frame
-                annotated, alert_level, alert_msg, severity = process_frame_combined(
-                    frame, drowsy_det, distract_det, alert_sys, camera_type
-                )
-                
-                # Calculate FPS
-                fps = 1 / (time.time() - fps_time + 1e-6)
-                fps_time = time.time()
-                
-                # Add FPS overlay
-                cv2.putText(annotated, f"FPS: {fps:.1f}", (annotated.shape[1]-120, 30),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-                
-                # Display
-                frame_placeholder.image(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB), 
-                                      use_container_width=True)
-                
-                # Alert display
-                alert_color = alert_sys.get_color_for_level(alert_level)
-                alert_placeholder.markdown(
-                    f'<div style="background-color: {alert_color}; padding: 15px; '
-                    f'border-radius: 8px; color: white; font-weight: bold;">'
-                    f'{alert_msg}</div>',
-                    unsafe_allow_html=True
-                )
-                
-                severity_placeholder.progress(severity / 10, text=f"Risk: {severity}/10")
-                
-                # Update chart every 10 frames
-                if stats['total_events'] % 10 == 0:
-                    fig = create_severity_chart(alert_sys)
-                    if fig:
-                        chart_placeholder.plotly_chart(fig, use_container_width=True)
-                
-                time.sleep(0.01)
+            # Process both
+            drowsy_status, drowsy_sev, drowsy_frame = drowsy_det.detect(frame)
+            distract_act, distract_sev, distract_frame = distract_det.detect(frame)
             
-            cap.release()
+            # Get alert
+            alert_level, alert_msg, combined_sev = alert_sys.evaluate(
+                drowsy_status, drowsy_sev, distract_act, distract_sev
+            )
+            
+            # Display
+            front_frame.image(cv2.cvtColor(drowsy_frame, cv2.COLOR_BGR2RGB))
+            side_frame.image(cv2.cvtColor(distract_frame, cv2.COLOR_BGR2RGB))
+            
+            # Alert
+            color = alert_sys.get_color_for_level(alert_level)
+            alert_placeholder.markdown(
+                f'<div style="background:{color}; padding:15px; border-radius:8px; color:white; font-weight:bold;">'
+                f'{alert_msg}</div>',
+                unsafe_allow_html=True
+            )
+            
+            time.sleep(0.03)
+        
+        cap.release()
 
-# === UPLOAD VIDEO ===
-elif input_type == "📁 Upload Video":
-    st.subheader("📹 Video Analysis")
+elif mode == "📁 Upload Videos (Dual)":
+    st.subheader("📹 Upload Two Videos for Complete Analysis")
     
-    uploaded_file = st.file_uploader("Upload a video file", type=['mp4', 'avi', 'mov', 'mkv'])
+    col1, col2 = st.columns(2)
     
-    if uploaded_file:
-        tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-        tfile.write(uploaded_file.read())
-        
-        col1, col2 = st.columns([3, 1])
-        
-        with col1:
-            frame_placeholder = st.empty()
-        with col2:
+    with col1:
+        st.write("**Front Camera (Drowsiness Detection)**")
+        front_video = st.file_uploader("Upload front video", type=['mp4', 'avi', 'mov'], key='front')
+    
+    with col2:
+        st.write("**Side Camera (Distraction Detection)**")
+        side_video = st.file_uploader("Upload side video", type=['mp4', 'avi', 'mov'], key='side')
+    
+    if st.button("🎬 Analyze Videos", use_container_width=True):
+        if not front_video and not side_video:
+            st.error("⚠️ Please upload at least one video")
+        else:
+            # Save uploaded files
+            front_path = None
+            side_path = None
+            
+            if front_video:
+                front_temp = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+                front_temp.write(front_video.read())
+                front_path = front_temp.name
+            
+            if side_video:
+                side_temp = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+                side_temp.write(side_video.read())
+                side_path = side_temp.name
+            
+            # Process videos
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.subheader("Front Camera Analysis")
+                front_frame_placeholder = st.empty()
+            
+            with col2:
+                st.subheader("Side Camera Analysis")
+                side_frame_placeholder = st.empty()
+            
             alert_placeholder = st.empty()
             progress_bar = st.progress(0)
-        
-        chart_placeholder = st.empty()
-        
-        if st.button("▶️ Analyze Video", use_container_width=True):
-            cap = cv2.VideoCapture(tfile.name)
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            
+            # Open videos
+            front_cap = cv2.VideoCapture(front_path) if front_path else None
+            side_cap = cv2.VideoCapture(side_path) if side_path else None
+            
+            # Get frame count
+            total_frames = 0
+            if front_cap:
+                total_frames = max(total_frames, int(front_cap.get(cv2.CAP_PROP_FRAME_COUNT)))
+            if side_cap:
+                total_frames = max(total_frames, int(side_cap.get(cv2.CAP_PROP_FRAME_COUNT)))
+            
             current_frame = 0
-            
             alert_sys.reset()
-            drowsy_det.reset()
-            distract_det.reset()
             
-            while cap.isOpened():
-                ret, frame = cap.read()
-                if not ret:
+            while True:
+                front_ret = front_cap.read() if front_cap else (False, None)
+                side_ret = side_cap.read() if side_cap else (False, None)
+                
+                if not front_ret[0] and not side_ret[0]:
                     break
                 
                 current_frame += 1
                 
-                # Process every 3rd frame for speed
-                if current_frame % 3 != 0:
-                    continue
+                # Process frames
+                drowsy_status, drowsy_sev, drowsy_frame = ('safe', 0, front_ret[1]) if front_ret[0] else ('unknown', 0, None)
+                distract_act, distract_sev, distract_frame = ('safe_driving', 0, side_ret[1]) if side_ret[0] else ('unknown', 0, None)
                 
-                annotated, alert_level, alert_msg, severity = process_frame_combined(
-                    frame, drowsy_det, distract_det, alert_sys, camera_type
+                if front_ret[0]:
+                    drowsy_status, drowsy_sev, drowsy_frame = drowsy_det.detect(front_ret[1])
+                    front_frame_placeholder.image(cv2.cvtColor(drowsy_frame, cv2.COLOR_BGR2RGB))
+                
+                if side_ret[0]:
+                    distract_act, distract_sev, distract_frame = distract_det.detect(side_ret[1])
+                    side_frame_placeholder.image(cv2.cvtColor(distract_frame, cv2.COLOR_BGR2RGB))
+                
+                # Alert
+                alert_level, alert_msg, combined_sev = alert_sys.evaluate(
+                    drowsy_status, drowsy_sev, distract_act, distract_sev
                 )
                 
-                # Display
-                frame_placeholder.image(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB),
-                                      use_container_width=True)
-                
-                alert_color = alert_sys.get_color_for_level(alert_level)
+                color = alert_sys.get_color_for_level(alert_level)
                 alert_placeholder.markdown(
-                    f'<div style="background-color: {alert_color}; padding: 15px; '
-                    f'border-radius: 8px; color: white; font-weight: bold;">'
+                    f'<div style="background:{color}; padding:15px; border-radius:8px; color:white; font-weight:bold;">'
                     f'{alert_msg}</div>',
                     unsafe_allow_html=True
                 )
                 
-                progress_bar.progress(current_frame / total_frames)
-                
+                progress_bar.progress(min(current_frame / total_frames, 1.0))
                 time.sleep(0.01)
             
-            cap.release()
+            # Cleanup
+            if front_cap:
+                front_cap.release()
+            if side_cap:
+                side_cap.release()
             
-            # Final statistics
-            st.success("✅ Video analysis complete!")
+            if front_path:
+                os.unlink(front_path)
+            if side_path:
+                os.unlink(side_path)
+            
+            # Final stats
+            st.success("✅ Analysis Complete!")
             st.divider()
-            st.subheader("📊 Analysis Summary")
-            create_metrics_dashboard(alert_sys.get_statistics())
             
-            fig = create_severity_chart(alert_sys)
-            if fig:
-                st.plotly_chart(fig, use_container_width=True)
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Total Frames", stats['total_events'])
+            with col2:
+                st.metric("Critical Alerts", stats['critical_events'])
+            with col3:
+                st.metric("High Alerts", stats['high_events'])
+            with col4:
+                st.metric("Safe %", f"{stats['safe_percentage']:.1f}%")
 
-# === UPLOAD IMAGES ===
-else:
-    st.subheader("🖼️ Image Analysis")
+else:  # Images
+    st.subheader("🖼️ Upload Images for Analysis")
     
-    uploaded_files = st.file_uploader("Upload images", type=['jpg', 'jpeg', 'png'], 
-                                     accept_multiple_files=True)
+    uploaded_files = st.file_uploader(
+        "Upload driver images", 
+        type=['jpg', 'jpeg', 'png'], 
+        accept_multiple_files=True
+    )
     
-    if uploaded_files:
-        if st.button("🔍 Analyze Images", use_container_width=True):
-            alert_sys.reset()
-            drowsy_det.reset()
-            distract_det.reset()
+    if uploaded_files and st.button("🔍 Analyze Images"):
+        cols = st.columns(2)
+        
+        for idx, uploaded_file in enumerate(uploaded_files):
+            img = Image.open(uploaded_file)
+            frame = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
             
-            cols = st.columns(2)
+            # Detect
+            drowsy_status, drowsy_sev, drowsy_frame = drowsy_det.detect(frame)
+            distract_act, distract_sev, distract_frame = distract_det.detect(frame)
             
-            for idx, uploaded_file in enumerate(uploaded_files):
-                img = Image.open(uploaded_file)
-                frame = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+            # Combined display
+            combined = np.hstack([drowsy_frame, distract_frame])
+            
+            with cols[idx % 2]:
+                st.image(cv2.cvtColor(combined, cv2.COLOR_BGR2RGB), 
+                        caption=f"Image {idx+1}", use_container_width=True)
                 
-                annotated, alert_level, alert_msg, severity = process_frame_combined(
-                    frame, drowsy_det, distract_det, alert_sys, camera_type
+                alert_level, alert_msg, _ = alert_sys.evaluate(
+                    drowsy_status, drowsy_sev, distract_act, distract_sev
                 )
                 
-                with cols[idx % 2]:
-                    st.image(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB),
-                            caption=f"Image {idx+1}", use_container_width=True)
-                    
-                    alert_color = alert_sys.get_color_for_level(alert_level)
-                    st.markdown(
-                        f'<div style="background-color: {alert_color}; padding: 10px; '
-                        f'border-radius: 5px; color: white; font-size: 0.9rem;">'
-                        f'{alert_msg}</div>',
-                        unsafe_allow_html=True
-                    )
-            
-            st.divider()
-            st.subheader("📊 Overall Analysis")
-            create_metrics_dashboard(alert_sys.get_statistics())
+                color = alert_sys.get_color_for_level(alert_level)
+                st.markdown(
+                    f'<div style="background:{color}; padding:10px; border-radius:5px; color:white;">'
+                    f'{alert_msg}</div>',
+                    unsafe_allow_html=True
+                )
 
-# ================================
-# FOOTER
-# ================================
+# Footer
 st.divider()
 st.markdown("""
-<div style="text-align: center; color: #888; font-size: 0.9rem;">
-    <p>🚗 Driver Safety Monitoring System v1.0</p>
-    <p>Powered by TensorFlow & OpenCV | Built with Streamlit</p>
+<div style="text-align:center; color:#888; font-size:0.9rem;">
+    <p>🚗 Driver Safety Monitoring System | Powered by TensorFlow & OpenCV</p>
 </div>
 """, unsafe_allow_html=True)
