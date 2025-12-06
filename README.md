@@ -270,17 +270,6 @@ Ensure you downloaded the distraction model from Google Drive and placed it in `
 
 ---
 
-## 🤝 Contributing
-
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit changes (`git commit -m 'Add AmazingFeature'`)
-4. Push to branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
----
 
 ## 📜 License
 
@@ -297,26 +286,9 @@ This project is licensed under the MIT License - see [LICENSE](LICENSE) file for
 
 ---
 
-## 📧 Contact
-
-For questions or support:
-- **GitHub Issues**: [Open an issue](https://github.com/YOUR_USERNAME/driver-safety-system/issues)
-- **Email**: your.email@example.com
-
 ---
 
-## 🎓 Citation
 
-If you use this project in research, please cite:
-
-```bibtex
-@software{driver_safety_system,
-  title={Driver Safety Monitoring System},
-  author={Your Name},
-  year={2024},
-  url={https://github.com/YOUR_USERNAME/driver-safety-system}
-}
-```
 
 ---
 
